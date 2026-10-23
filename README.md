@@ -64,6 +64,7 @@ Talk normally. When you pause, your message is sent.
 | `--voice NAME URL JSON_URL` | Uses a different Piper voice, e.g. from [rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices). |
 | `--cpu` | Skips the Vulkan build. |
 | `--lan` | Lets other machines on your network use Whisper. |
+| `--sounds` | Keeps VoiceMode's beeps on every tool call during normal (non-voice) chats. They're off by default. |
 
 Example with a standard Piper voice:
 
@@ -97,6 +98,7 @@ voicemode service status
 
 - **No sound, or `piper: Unknown option --model`:** on some distros, `piper` is a gaming-mouse configuration tool. This setup uses its own Piper inside `~/.voicemode/services/piper`, so the system command doesn't matter.
 - **Whisper uses the wrong GPU:** set `GGML_VK_VISIBLE_DEVICES=0` (or `1`) for the `voicemode-whisper` service.
+- **Beeping during normal text chats:** these are VoiceMode's tool-use sounds, which play when a voice conversation *isn't* running. The installer turns them off. Toggle them any time with `voicemode soundfonts off` or `voicemode soundfonts on`.
 - **Changes don't apply:** VoiceMode reads `~/.voicemode/voicemode.env` when Claude Code starts, so start a new session.
 - **After a VoiceMode update or an Arch Python upgrade** (for example, 3.14 to 3.15): run `./install.sh` again. It rebuilds anything that broke, and leaves the rest alone.
 

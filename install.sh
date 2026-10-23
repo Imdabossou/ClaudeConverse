@@ -17,6 +17,7 @@ USE_VULKAN=1
 HYPRWHSPR=0
 KOKORO_ROCM=0
 LAN=0
+SOUNDS=0
 
 usage() {
   cat <<EOF
@@ -29,6 +30,7 @@ Usage: ./install.sh [options]
   --hyprwhspr                Point hyprwhspr dictation at the same Whisper server
   --kokoro-rocm              Keep VoiceMode's Kokoro TTS as a fallback, on an AMD GPU (ROCm)
   --lan                      Let other machines on your network use Whisper (default: localhost only)
+  --sounds                   Keep VoiceMode's beeps on every tool call (off by default)
   -h, --help                 Show this help
 EOF
 }
@@ -41,6 +43,7 @@ while [[ $# -gt 0 ]]; do
     --hyprwhspr) HYPRWHSPR=1; shift ;;
     --kokoro-rocm) KOKORO_ROCM=1; shift ;;
     --lan) LAN=1; shift ;;
+    --sounds) SOUNDS=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1"; usage; exit 1 ;;
   esac
@@ -186,6 +189,14 @@ fi
 
 set_env VOICEMODE_TTS_BASE_URLS "$tts_urls"
 set_env VOICEMODE_VOICES "$voices"
+# VoiceMode's plugin beeps on every tool call whenever a voice conversation
+# *isn't* running, i.e. during normal text chats. Off unless asked for.
+if [[ $SOUNDS == 1 ]]; then
+  set_env VOICEMODE_SOUNDFONTS_ENABLED true
+  rm -f "$VM_DIR/soundfonts-disabled"
+else
+  set_env VOICEMODE_SOUNDFONTS_ENABLED false
+fi
 
 # ---------------------------------------------------------------- hyprwhspr
 if [[ $HYPRWHSPR == 1 ]]; then
