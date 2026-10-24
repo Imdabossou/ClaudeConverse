@@ -120,22 +120,11 @@ ok "/converse command installed; VoiceMode server on 127.0.0.1:8765"
 
 # ---------------------------------------------------------------- hyprwhspr
 step "Using hyprwhspr for speech-to-text"
-# Older versions of this script pointed hyprwhspr at a separate Whisper server; undo that
-if [[ -f "$HYPR_CFG.before-voicemode" ]] && grep -q '127.0.0.1:2022' "$HYPR_CFG"; then
-  mv "$HYPR_CFG.before-voicemode" "$HYPR_CFG"
-  systemctl --user restart hyprwhspr 2>/dev/null || true
-  ok "restored hyprwhspr's own Whisper backend"
-fi
 backend=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("transcription_backend","pywhispercpp"))' "$HYPR_CFG")
 [[ $backend == realtime-ws ]] && die "hyprwhspr's realtime-ws backend can't transcribe for VoiceMode; pick another in 'hyprwhspr setup'"
 systemctl --user enable hyprwhspr >/dev/null 2>&1 || true
 systemctl --user is-active -q hyprwhspr || systemctl --user restart hyprwhspr
 ok "hyprwhspr backend: $backend"
-# ...and switch off the separate Whisper server those versions installed
-if [[ -f "$UNIT_DIR/voicemode-whisper.service" ]]; then
-  systemctl --user disable --now voicemode-whisper >/dev/null 2>&1 || true
-  ok "old separate Whisper server switched off (remove ~/.voicemode/services/whisper to reclaim space)"
-fi
 # The Piper server's /v1/audio/transcriptions forwards to hyprwhspr's control socket
 set_env VOICEMODE_STT_BASE_URLS http://127.0.0.1:8881/v1
 

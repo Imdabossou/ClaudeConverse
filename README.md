@@ -135,7 +135,6 @@ journalctl --user -u voicemode-piper -f
 - **`/converse` says it can't connect:** check that `voicemode-serve` is running. On a remote, also check its tunnel on this machine: `journalctl --user -u 'voicemode-tunnel@*'`.
 - **Changed the voice or other settings:** run `systemctl --user restart voicemode-serve`, then start a new Claude Code session.
 - **After a VoiceMode update or an Arch Python upgrade** (for example, 3.14 to 3.15): run `./install.sh` again. It rebuilds anything that broke, and leaves the rest alone.
-- **Upgrading from an older version of this repo** that built its own Whisper server: rerun `./install.sh`. It switches that server off and puts hyprwhspr back on its own backend. Delete `~/.voicemode/services/whisper` to reclaim about 1 GB.
 
 ## Uninstall
 
