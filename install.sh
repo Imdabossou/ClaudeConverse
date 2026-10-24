@@ -26,7 +26,8 @@ Usage: ./install.sh [options]
                              (e.g. from huggingface.co/rhasspy/piper-voices)
   --whisper-model MODEL      Whisper model (default: base.en; e.g. small.en, large-v3-turbo)
   --cpu                      Don't build Whisper with Vulkan (CPU only)
-  --hyprwhspr                Point hyprwhspr dictation at the same Whisper server
+  --hyprwhspr                Use your running hyprwhspr for speech-to-text, so dictation and
+                             VoiceMode share its Whisper (no separate Whisper server is built)
   --kokoro-rocm              Keep VoiceMode's Kokoro TTS as a fallback, on an AMD GPU (ROCm)
   --lan                      Let other machines on your network use Whisper (default: localhost only)
   -h, --help                 Show this help
@@ -136,27 +137,50 @@ cp "$REPO_DIR/commands/converse.md" "$HOME/.claude/commands/converse.md"
 ok "/converse command installed; VoiceMode server on 127.0.0.1:8765"
 
 # ---------------------------------------------------------------- Whisper
-step "Installing whisper.cpp ($WHISPER_MODEL)"
-# 'voicemode whisper install' is deprecated, but it is the only form that takes --no-gpu/--model
-vm whisper install --no-gpu --model "$WHISPER_MODEL" | grep -vE 'Progress:|Deprecated' | tail -3 || true
-[[ -x "$WHISPER_DIR/build/bin/whisper-server" ]] || die "whisper.cpp install failed"
-set_env VOICEMODE_WHISPER_MODEL "$WHISPER_MODEL"
+if [[ $HYPRWHSPR == 1 ]]; then
+  step "Using hyprwhspr for speech-to-text (one shared Whisper, no extra server)"
+  cfg="$HOME/.config/hyprwhspr/config.json"
+  command -v hyprwhspr >/dev/null || die "hyprwhspr isn't installed (AUR: hyprwhspr)"
+  [[ -f "$cfg" ]] || die "hyprwhspr config not found at $cfg; run 'hyprwhspr setup' first"
+  # Older versions of this script pointed hyprwhspr at VoiceMode's Whisper; undo that
+  if [[ -f "$cfg.before-voicemode" ]] && grep -q '127.0.0.1:2022' "$cfg"; then
+    mv "$cfg.before-voicemode" "$cfg"
+    systemctl --user restart hyprwhspr 2>/dev/null || true
+    ok "restored hyprwhspr's own Whisper backend"
+  fi
+  backend=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("transcription_backend","pywhispercpp"))' "$cfg")
+  [[ $backend == realtime-ws ]] && die "hyprwhspr's realtime-ws backend can't transcribe files; pick another backend"
+  ok "hyprwhspr backend: $backend"
+  if [[ -f "$UNIT_DIR/voicemode-whisper.service" ]]; then
+    systemctl --user disable --now voicemode-whisper >/dev/null 2>&1 || true
+    ok "VoiceMode's own Whisper server switched off"
+  fi
+  stt_url="http://127.0.0.1:8881/v1"   # the Piper server forwards to hyprwhspr's socket
+else
+  step "Installing whisper.cpp ($WHISPER_MODEL)"
+  # 'voicemode whisper install' is deprecated, but it is the only form that takes --no-gpu/--model
+  vm whisper install --no-gpu --model "$WHISPER_MODEL" | grep -vE 'Progress:|Deprecated' | tail -3 || true
+  [[ -x "$WHISPER_DIR/build/bin/whisper-server" ]] || die "whisper.cpp install failed"
+  set_env VOICEMODE_WHISPER_MODEL "$WHISPER_MODEL"
 
-if [[ $USE_VULKAN == 1 ]]; then
-  step "Rebuilding whisper.cpp with Vulkan (VoiceMode only builds for CUDA/Metal)"
-  (cd "$WHISPER_DIR" &&
-    cmake -B build -DGGML_VULKAN=ON -DCMAKE_BUILD_TYPE=Release -Wno-dev >/dev/null 2>&1 &&
-    cmake --build build -j"$(nproc)" --config Release >/dev/null) || die "Vulkan build failed (try --cpu)"
-  ok "built with Vulkan"
+  if [[ $USE_VULKAN == 1 ]]; then
+    step "Rebuilding whisper.cpp with Vulkan (VoiceMode only builds for CUDA/Metal)"
+    (cd "$WHISPER_DIR" &&
+      cmake -B build -DGGML_VULKAN=ON -DCMAKE_BUILD_TYPE=Release -Wno-dev >/dev/null 2>&1 &&
+      cmake --build build -j"$(nproc)" --config Release >/dev/null) || die "Vulkan build failed (try --cpu)"
+    ok "built with Vulkan"
+  fi
+
+  if [[ $LAN == 0 ]]; then
+    sed -i 's/--host 0\.0\.0\.0/--host 127.0.0.1/' "$WHISPER_DIR/bin/start-whisper-server.sh"
+    ok "Whisper only accepts connections from this machine"
+  fi
+
+  vm service enable whisper >/dev/null
+  systemctl --user restart voicemode-whisper
+  stt_url="http://127.0.0.1:2022/v1"
 fi
-
-if [[ $LAN == 0 ]]; then
-  sed -i 's/--host 0\.0\.0\.0/--host 127.0.0.1/' "$WHISPER_DIR/bin/start-whisper-server.sh"
-  ok "Whisper only accepts connections from this machine"
-fi
-
-vm service enable whisper >/dev/null
-systemctl --user restart voicemode-whisper
+set_env VOICEMODE_STT_BASE_URLS "$stt_url"
 
 # ---------------------------------------------------------------- Piper
 step "Installing Piper TTS with the '$VOICE_NAME' voice (per-user venv on system Python)"
@@ -205,29 +229,13 @@ fi
 
 set_env VOICEMODE_TTS_BASE_URLS "$tts_urls"
 set_env VOICEMODE_VOICES "$voices"
-
-# ---------------------------------------------------------------- hyprwhspr
-if [[ $HYPRWHSPR == 1 ]]; then
-  step "Connecting hyprwhspr to the shared Whisper server"
-  cfg="$HOME/.config/hyprwhspr/config.json"
-  [[ -f "$cfg" ]] || die "hyprwhspr config not found at $cfg"
-  [[ -f "$cfg.before-voicemode" ]] || cp "$cfg" "$cfg.before-voicemode"
-  python3 - "$cfg" <<'EOF'
-import json, sys
-p = sys.argv[1]
-c = json.load(open(p))
-c["transcription_backend"] = "rest-api"
-c["rest_endpoint_url"] = "http://127.0.0.1:2022/v1/audio/transcriptions"
-json.dump(c, open(p, "w"), indent=2)
-EOF
-  systemctl --user restart hyprwhspr 2>/dev/null || warn "restart hyprwhspr yourself"
-  ok "backup saved as $cfg.before-voicemode"
-fi
+systemctl --user restart voicemode-serve   # it reads voicemode.env at start
 
 # ---------------------------------------------------------------- verify
 step "Testing"
 for _ in $(seq 30); do
-  curl -fs -o /dev/null http://127.0.0.1:8881/health && curl -fs -o /dev/null http://127.0.0.1:2022/ && break
+  curl -fs -o /dev/null http://127.0.0.1:8881/health &&
+    { [[ $HYPRWHSPR == 1 ]] || curl -fs -o /dev/null http://127.0.0.1:2022/; } && break
   sleep 1
 done
 tmp="$(mktemp --suffix .wav)"
@@ -238,12 +246,21 @@ if curl -fs -X POST http://127.0.0.1:8881/v1/audio/speech -H 'Content-Type: appl
 else
   die "Piper server not responding (journalctl --user -u voicemode-piper)"
 fi
-if text=$(curl -fs http://127.0.0.1:2022/v1/audio/transcriptions -F file=@"$tmp" -F model=whisper-1); then
+text=""
+for _ in 1 2 3; do
+  text=$(curl -fs "$stt_url/audio/transcriptions" -F file=@"$tmp" -F model=whisper-1) && break
+  sleep 5
+done
+if [[ -n "$text" ]]; then
   ok "Whisper heard: $text"
+elif [[ $HYPRWHSPR == 1 && "$(cat "$HOME/.config/hyprwhspr/recording_status" 2>/dev/null)" == true ]]; then
+  warn "hyprwhspr is busy recording dictation, so the speech-to-text test was skipped"
+elif [[ $HYPRWHSPR == 1 ]]; then
+  die "hyprwhspr didn't transcribe (is it running and its model loaded? journalctl --user -u hyprwhspr)"
 else
   die "Whisper not responding (journalctl --user -u voicemode-whisper)"
 fi
-if [[ $USE_VULKAN == 1 ]]; then
+if [[ $HYPRWHSPR == 0 && $USE_VULKAN == 1 ]]; then
   gpu=$(journalctl --user -u voicemode-whisper --since "-5min" --no-pager 2>/dev/null |
         grep -m1 -oP 'ggml_vulkan: 0 = \K[^(]+' || true)
   if [[ -n "$gpu" ]]; then ok "Whisper GPU: $gpu"; else warn "couldn't confirm the Vulkan GPU from the logs"; fi

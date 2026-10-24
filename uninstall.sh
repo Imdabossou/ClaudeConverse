@@ -32,7 +32,7 @@ if [[ -f "$cfg.before-voicemode" ]]; then
   systemctl --user restart hyprwhspr 2>/dev/null
 fi
 
-[[ -f "$VM_ENV" ]] && sed -i '/^VOICEMODE_TTS_BASE_URLS=/d; /^VOICEMODE_VOICES=/d' "$VM_ENV"
+[[ -f "$VM_ENV" ]] && sed -i '/^VOICEMODE_TTS_BASE_URLS=/d; /^VOICEMODE_STT_BASE_URLS=/d; /^VOICEMODE_VOICES=/d' "$VM_ENV"
 
 if [[ "${1:-}" == "--all" ]]; then
   echo "Removing VoiceMode completely..."

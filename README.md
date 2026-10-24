@@ -10,7 +10,7 @@ This is a setup script on top of [VoiceMode](https://github.com/mbailey/voicemod
 |---|---|---|
 | Speech-to-text GPU | NVIDIA (CUDA) or Apple only | **Any Vulkan GPU**: whisper.cpp is rebuilt with `GGML_VULKAN` |
 | Voice | Kokoro voices | **Any Piper voice** (GLaDOS by default) through a small OpenAI-compatible server |
-| Dictation | Separate | Optionally shares one Whisper with [hyprwhspr](https://github.com/goodroot/hyprwhspr), so only one model sits in VRAM |
+| Dictation | Separate | With `--hyprwhspr`, VoiceMode uses [hyprwhspr](https://github.com/goodroot/hyprwhspr)'s Whisper, so one model serves both dictation and voice chats, and no separate Whisper server is built |
 | Kokoro on AMD | Uses CUDA PyTorch, so it falls back to a single CPU core | Optional ROCm PyTorch build on the GPU |
 | Network | Whisper listens on all interfaces | Localhost only by default |
 | Command | `/voicemode:converse` (plugin) | `/converse`, the same on every machine |
@@ -34,7 +34,7 @@ The installer installs everything else.
 | `shaderc vulkan-headers vulkan-icd-loader` + `vulkan-radeon` / `vulkan-intel` (detected from your GPU) | official repos | system |
 | `rocm-hip-runtime` (only with `--kokoro-rocm`) | official repos | system |
 | [VoiceMode](https://github.com/mbailey/voicemode) | PyPI via `uv tool`, on Arch's own Python | `~/.local` |
-| whisper.cpp (built with Vulkan) | built from source by VoiceMode | `~/.voicemode/services/whisper` |
+| whisper.cpp (built with Vulkan; skipped with `--hyprwhspr`) | built from source by VoiceMode | `~/.voicemode/services/whisper` |
 | piper-tts | PyPI, in a venv on Arch's own Python | `~/.voicemode/services/piper` |
 | GLaDOS voice | this repo ([`voices/`](voices/)) | `~/.local/share/piper-voices` |
 | `/converse` command | this repo ([`commands/`](commands/)) | `~/.claude/commands` |
@@ -61,7 +61,7 @@ Talk normally. When you pause, your message is sent. Say "end voice mode" to sto
 
 | Flag | What it does |
 |---|---|
-| `--hyprwhspr` | Points hyprwhspr dictation at the shared Whisper server. Your old config is backed up. |
+| `--hyprwhspr` | Uses your running hyprwhspr for speech-to-text instead of building a Whisper server, so dictation and `/converse` share one Whisper model. hyprwhspr's config isn't changed. |
 | `--whisper-model small.en` | Uses a bigger, more accurate Whisper model. The default is `base.en`. |
 | `--kokoro-rocm` | Keeps VoiceMode's Kokoro voices as a fallback, running on an AMD GPU (needs about 1 GB of VRAM). |
 | `--voice NAME URL JSON_URL` | Uses a different Piper voice, e.g. from [rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices). |
@@ -110,17 +110,19 @@ Then start a **new** Claude Code session on the remote and run `/converse`.
 ## How it works
 
 ```
- mic ──► VoiceMode ──► whisper-server :2022 (Vulkan GPU) ──► text ──► Claude
-                                    ▲
-             hyprwhspr (optional) ──┘
+ mic ──► VoiceMode ──► speech-to-text ──► text ──► Claude
+                         ├─ default:      whisper-server :2022 (Vulkan GPU)
+                         └─ --hyprwhspr:  piper-server :8881 ──► hyprwhspr socket
+                                          (hyprwhspr's own Whisper, also used for dictation)
 
  Claude ──► VoiceMode ──► piper-server :8881 (CPU) ──► speakers
 ```
 
 - **VoiceMode** runs as a local HTTP server (`voicemode-serve`, `127.0.0.1:8765`, token login). Claude Code connects to it as an MCP server the same way on this machine and on remote ones. The VoiceMode plugin isn't used: its command is `/voicemode:converse`, and it plays a sound on every tool call during normal text chats.
-- **Whisper:** VoiceMode installs whisper.cpp, and the script rebuilds it with `-DGGML_VULKAN=ON`. If you have more than one GPU, you can pick one with `GGML_VK_VISIBLE_DEVICES`.
+- **hyprwhspr (with `--hyprwhspr`):** hyprwhspr keeps its Whisper model loaded for dictation and accepts `transcribe_file` requests on its control socket (`$XDG_RUNTIME_DIR/hyprwhspr/hyprwhspr.sock`). `piper-server` adds an OpenAI-style `POST /v1/audio/transcriptions` that forwards to it, so VoiceMode can use it. Results only come back to VoiceMode; nothing is typed. If you're mid-dictation, it waits a few seconds and tries again. Use any hyprwhspr backend except `realtime-ws`.
+- **Whisper (without `--hyprwhspr`):** VoiceMode installs whisper.cpp, and the script rebuilds it with `-DGGML_VULKAN=ON`. If you have more than one GPU, you can pick one with `GGML_VK_VISIBLE_DEVICES`.
 - **Piper:** [`piper-server/server.py`](piper-server/server.py) serves `POST /v1/audio/speech` in OpenAI's format, which is what VoiceMode expects. Piper voices are 16–22 kHz, so the server resamples them to 24 kHz with soxr. Without that, they play too fast and sound crispy.
-- Everything runs as systemd user services: `voicemode-serve`, `voicemode-whisper` and `voicemode-piper` (plus `voicemode-kokoro` with `--kokoro-rocm`, and one `voicemode-tunnel@…` per remote).
+- Everything runs as systemd user services: `voicemode-serve`, `voicemode-piper` and `voicemode-whisper` (not with `--hyprwhspr`) (plus `voicemode-kokoro` with `--kokoro-rocm`, and one `voicemode-tunnel@…` per remote).
 
 ## Troubleshooting
 
@@ -132,6 +134,7 @@ voicemode service status
 
 - **No sound, or `piper: Unknown option --model`:** on some distros, `piper` is a gaming-mouse configuration tool. This setup uses its own Piper inside `~/.voicemode/services/piper`, so the system command doesn't matter.
 - **Whisper uses the wrong GPU:** set `GGML_VK_VISIBLE_DEVICES=0` (or `1`) for the `voicemode-whisper` service.
+- **"Cannot transcribe a file while recording":** hyprwhspr was busy with a dictation. Finish it and speak again.
 - **`/converse` says it can't connect:** check that `voicemode-serve` is running. On a remote, also check its tunnel on this machine: `journalctl --user -u 'voicemode-tunnel@*'`.
 - **Changed the voice or other settings:** run `systemctl --user restart voicemode-serve`, then start a new Claude Code session.
 - **After a VoiceMode update or an Arch Python upgrade** (for example, 3.14 to 3.15): run `./install.sh` again. It rebuilds anything that broke, and leaves the rest alone.
