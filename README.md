@@ -2,7 +2,7 @@
 
 Hands-free voice conversations with [Claude Code](https://claude.com/claude-code) on **Arch Linux**, running locally on **any Vulkan GPU** (AMD, Intel or NVIDIA), with a [Piper](https://github.com/OHF-Voice/piper1-gpl) voice. The default voice is GLaDOS.
 
-You talk, Claude answers out loud, and then it listens again. No keyboard needed.
+You talk, Claude answers out loud, and then it listens again. No keyboard needed. It also works with Claude Code running on **another machine**, like a home server, which then speaks and listens through your desktop.
 
 This is a setup script on top of [VoiceMode](https://github.com/mbailey/voicemode), which does the hard part. It adds the following:
 
@@ -13,6 +13,8 @@ This is a setup script on top of [VoiceMode](https://github.com/mbailey/voicemod
 | Dictation | Separate | Optionally shares one Whisper with [hyprwhspr](https://github.com/goodroot/hyprwhspr), so only one model sits in VRAM |
 | Kokoro on AMD | Uses CUDA PyTorch, so it falls back to a single CPU core | Optional ROCm PyTorch build on the GPU |
 | Network | Whisper listens on all interfaces | Localhost only by default |
+| Command | `/voicemode:converse` (plugin) | `/converse`, the same on every machine |
+| Remote machines | Manual setup | `./connect-remote.sh user@host`: SSH tunnel with a restricted key |
 
 On a Radeon RX 7900 XTX, transcription takes about 0.1 s, and Claude starts speaking about 0.3 s after its reply is ready. The GLaDOS voice runs on the CPU, so it uses no VRAM. Whisper `base.en` uses a few hundred MB.
 
@@ -35,6 +37,7 @@ The installer installs everything else.
 | whisper.cpp (built with Vulkan) | built from source by VoiceMode | `~/.voicemode/services/whisper` |
 | piper-tts | PyPI, in a venv on Arch's own Python | `~/.voicemode/services/piper` |
 | GLaDOS voice | this repo ([`voices/`](voices/)) | `~/.local/share/piper-voices` |
+| `/converse` command | this repo ([`commands/`](commands/)) | `~/.claude/commands` |
 
 VoiceMode, whisper.cpp and piper-tts aren't in the official repos (the AUR only has outdated or unrelated builds). So they're installed per user in your home folder, and nothing is pip-installed into system Python or `/usr`. Everything outside pacman's control is removed by `./uninstall.sh`.
 
@@ -49,10 +52,10 @@ cd voicemode-vulkan
 The script asks for your password once, for `pacman`, and only if a package is missing. Then start a **new** Claude Code session and run:
 
 ```
-/voicemode:converse
+/converse
 ```
 
-Talk normally. When you pause, your message is sent.
+Talk normally. When you pause, your message is sent. Say "end voice mode" to stop. The first time, Claude Code asks for permission to use the `voicemode` converse tool; choose "always allow" for hands-free use.
 
 ### Options
 
@@ -64,7 +67,6 @@ Talk normally. When you pause, your message is sent.
 | `--voice NAME URL JSON_URL` | Uses a different Piper voice, e.g. from [rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices). |
 | `--cpu` | Skips the Vulkan build. |
 | `--lan` | Lets other machines on your network use Whisper. |
-| `--sounds` | Keeps VoiceMode's beeps on every tool call during normal (non-voice) chats. They're off by default. |
 
 Example with a standard Piper voice:
 
@@ -73,6 +75,37 @@ Example with a standard Piper voice:
   https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx \
   https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx.json
 ```
+
+## Talking to Claude Code on another machine
+
+If you run Claude Code on a server or mini PC (for example, through Remote Control), it can use **this** machine's microphone, speakers and GPU:
+
+```bash
+./connect-remote.sh user@192.168.0.8
+```
+
+The remote machine only needs Claude Code and an SSH server. Nothing else is installed there: no Whisper, no GPU and no audio.
+
+```
+ remote: Claude ──► 127.0.0.1:18765 ─┐
+                                     │ SSH reverse tunnel, started from this machine
+ this machine:  VoiceMode :8765 ◄────┘──► mic, speakers, Whisper (GPU), Piper
+```
+
+What the script does:
+
+1. **Creates a dedicated SSH key** (`~/.ssh/voicemode_tunnel`). You type the remote machine's password once, for `ssh-copy-id`.
+2. **Sets up the remote's Claude Code:** it registers the `voicemode` MCP server at `http://127.0.0.1:18765/mcp` with the login token, and adds the same `/converse` command.
+3. **Locks the key down:** on the remote, it's restricted to `restrict,port-forwarding,permitlisten="127.0.0.1:18765",command="/usr/bin/false"`, so it can hold open this one tunnel but can't open a shell. A backup of `authorized_keys` is kept.
+4. **Starts the tunnel** as a systemd user service (`voicemode-tunnel@user-host`) that starts at login and reconnects automatically.
+
+Then start a **new** Claude Code session on the remote and run `/converse`.
+
+- **Port in use?** Pick another: `./connect-remote.sh user@host 18766`.
+- **This machine must be on**, because that's where the audio and GPU are.
+- **Rerunning** is safe. Once the key is restricted, the script only restarts the tunnel.
+- **Removing:** `./connect-remote.sh --remove user@host`.
+- **Security:** VoiceMode only listens on `127.0.0.1` and requires a token (`~/.voicemode/serve-token`). The tunnel is the only way in from the remote, and nothing is opened on your network.
 
 ## How it works
 
@@ -84,28 +117,29 @@ Example with a standard Piper voice:
  Claude ──► VoiceMode ──► piper-server :8881 (CPU) ──► speakers
 ```
 
+- **VoiceMode** runs as a local HTTP server (`voicemode-serve`, `127.0.0.1:8765`, token login). Claude Code connects to it as an MCP server the same way on this machine and on remote ones. The VoiceMode plugin isn't used: its command is `/voicemode:converse`, and it plays a sound on every tool call during normal text chats.
 - **Whisper:** VoiceMode installs whisper.cpp, and the script rebuilds it with `-DGGML_VULKAN=ON`. If you have more than one GPU, you can pick one with `GGML_VK_VISIBLE_DEVICES`.
 - **Piper:** [`piper-server/server.py`](piper-server/server.py) serves `POST /v1/audio/speech` in OpenAI's format, which is what VoiceMode expects. Piper voices are 16–22 kHz, so the server resamples them to 24 kHz with soxr. Without that, they play too fast and sound crispy.
-- Everything runs as systemd user services: `voicemode-whisper` and `voicemode-piper` (plus `voicemode-kokoro` with `--kokoro-rocm`).
+- Everything runs as systemd user services: `voicemode-serve`, `voicemode-whisper` and `voicemode-piper` (plus `voicemode-kokoro` with `--kokoro-rocm`, and one `voicemode-tunnel@…` per remote).
 
 ## Troubleshooting
 
 ```bash
-systemctl --user status voicemode-whisper voicemode-piper
+systemctl --user status voicemode-serve voicemode-whisper voicemode-piper 'voicemode-tunnel@*'
 journalctl --user -u voicemode-piper -f
 voicemode service status
 ```
 
 - **No sound, or `piper: Unknown option --model`:** on some distros, `piper` is a gaming-mouse configuration tool. This setup uses its own Piper inside `~/.voicemode/services/piper`, so the system command doesn't matter.
 - **Whisper uses the wrong GPU:** set `GGML_VK_VISIBLE_DEVICES=0` (or `1`) for the `voicemode-whisper` service.
-- **Beeping during normal text chats:** these are VoiceMode's tool-use sounds, which play when a voice conversation *isn't* running. The installer turns them off. Toggle them any time with `voicemode soundfonts off` or `voicemode soundfonts on`.
-- **Changes don't apply:** VoiceMode reads `~/.voicemode/voicemode.env` when Claude Code starts, so start a new session.
+- **`/converse` says it can't connect:** check that `voicemode-serve` is running. On a remote, also check its tunnel on this machine: `journalctl --user -u 'voicemode-tunnel@*'`.
+- **Changed the voice or other settings:** run `systemctl --user restart voicemode-serve`, then start a new Claude Code session.
 - **After a VoiceMode update or an Arch Python upgrade** (for example, 3.14 to 3.15): run `./install.sh` again. It rebuilds anything that broke, and leaves the rest alone.
 
 ## Uninstall
 
 ```bash
-./uninstall.sh        # removes this setup and restores hyprwhspr's config; keeps VoiceMode
+./uninstall.sh        # removes this setup, tunnels and /converse, and restores hyprwhspr's config; keeps VoiceMode
 ./uninstall.sh --all  # also removes VoiceMode
 ```
 

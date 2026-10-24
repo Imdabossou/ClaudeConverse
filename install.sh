@@ -17,7 +17,6 @@ USE_VULKAN=1
 HYPRWHSPR=0
 KOKORO_ROCM=0
 LAN=0
-SOUNDS=0
 
 usage() {
   cat <<EOF
@@ -30,7 +29,6 @@ Usage: ./install.sh [options]
   --hyprwhspr                Point hyprwhspr dictation at the same Whisper server
   --kokoro-rocm              Keep VoiceMode's Kokoro TTS as a fallback, on an AMD GPU (ROCm)
   --lan                      Let other machines on your network use Whisper (default: localhost only)
-  --sounds                   Keep VoiceMode's beeps on every tool call (off by default)
   -h, --help                 Show this help
 EOF
 }
@@ -43,7 +41,6 @@ while [[ $# -gt 0 ]]; do
     --hyprwhspr) HYPRWHSPR=1; shift ;;
     --kokoro-rocm) KOKORO_ROCM=1; shift ;;
     --lan) LAN=1; shift ;;
-    --sounds) SOUNDS=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1"; usage; exit 1 ;;
   esac
@@ -115,9 +112,28 @@ uv tool install -q "${reinstall[@]}" --python /usr/bin/python3 voice-mode 2>&1 |
 command -v voicemode >/dev/null || die "voicemode CLI not found after install"
 ok "voicemode $(voicemode --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
 
-step "Installing the VoiceMode Claude Code plugin"
-claude plugin marketplace add mbailey/voicemode >/dev/null 2>&1 || true
-claude plugin install voicemode@voicemode 2>&1 | tail -1
+step "Connecting Claude Code to VoiceMode"
+# VoiceMode runs as a local HTTP server (localhost only, token login), so this
+# machine and remote ones (see ./connect-remote.sh) connect the same way and
+# share one /converse command. The VoiceMode plugin isn't used: its command
+# would be /voicemode:converse, and it beeps on every tool call.
+token_file="$VM_DIR/serve-token"
+[[ -s "$token_file" ]] || (umask 077; python3 -c 'import secrets; print(secrets.token_urlsafe(32))' > "$token_file")
+set_env VOICEMODE_SERVE_HOST 127.0.0.1
+set_env VOICEMODE_SERVE_PORT 8765
+set_env VOICEMODE_SERVE_TOKEN "$(cat "$token_file")"
+chmod 600 "$VM_ENV"
+vm service install voicemode >/dev/null
+vm service enable voicemode >/dev/null
+systemctl --user restart voicemode-serve
+
+claude plugin disable voicemode@voicemode >/dev/null 2>&1 || true
+claude mcp remove --scope user voicemode >/dev/null 2>&1 || true
+claude mcp add --scope user --transport http voicemode http://127.0.0.1:8765/mcp \
+  --header "Authorization: Bearer $(cat "$token_file")" >/dev/null
+mkdir -p "$HOME/.claude/commands"
+cp "$REPO_DIR/commands/converse.md" "$HOME/.claude/commands/converse.md"
+ok "/converse command installed; VoiceMode server on 127.0.0.1:8765"
 
 # ---------------------------------------------------------------- Whisper
 step "Installing whisper.cpp ($WHISPER_MODEL)"
@@ -189,14 +205,6 @@ fi
 
 set_env VOICEMODE_TTS_BASE_URLS "$tts_urls"
 set_env VOICEMODE_VOICES "$voices"
-# VoiceMode's plugin beeps on every tool call whenever a voice conversation
-# *isn't* running, i.e. during normal text chats. Off unless asked for.
-if [[ $SOUNDS == 1 ]]; then
-  set_env VOICEMODE_SOUNDFONTS_ENABLED true
-  rm -f "$VM_DIR/soundfonts-disabled"
-else
-  set_env VOICEMODE_SOUNDFONTS_ENABLED false
-fi
 
 # ---------------------------------------------------------------- hyprwhspr
 if [[ $HYPRWHSPR == 1 ]]; then
@@ -245,7 +253,11 @@ cat <<EOF
 
 $(printf '\033[1;32mDone!\033[0m') Start a new Claude Code session and run:
 
-    /voicemode:converse
+    /converse
 
-Talk normally; pausing sends your message.
+Talk normally; pausing sends your message. The first time, allow the
+"voicemode converse" tool when Claude Code asks.
+
+To talk to Claude Code on another machine through this one's mic and
+speakers, see ./connect-remote.sh.
 EOF
