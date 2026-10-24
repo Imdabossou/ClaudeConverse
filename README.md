@@ -1,4 +1,4 @@
-# voicemode-vulkan
+# claude-hyprwhspr-converse
 
 Hands-free voice conversations with [Claude Code](https://claude.com/claude-code) on **Arch Linux**, using the [hyprwhspr](https://github.com/goodroot/hyprwhspr) dictation you already run for speech-to-text, and a [Piper](https://github.com/OHF-Voice/piper1-gpl) voice for replies. The default voice is GLaDOS.
 
@@ -47,8 +47,8 @@ VoiceMode and piper-tts aren't in the official repos (the AUR only has outdated 
 ## Install
 
 ```bash
-git clone https://github.com/Imdabossou/voicemode-vulkan
-cd voicemode-vulkan
+git clone https://github.com/Imdabossou/claude-hyprwhspr-converse
+cd claude-hyprwhspr-converse
 ./install.sh
 ```
 
