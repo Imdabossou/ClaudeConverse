@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# claude-hyprwhspr-converse: hands-free voice conversations with Claude Code on
+# ClaudeConverse: hands-free voice conversations with Claude Code on
 # Arch Linux. Speech-to-text comes from hyprwhspr (the Whisper you already run
 # for dictation), replies are spoken with Piper (GLaDOS by default).
 #

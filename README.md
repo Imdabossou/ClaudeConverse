@@ -1,4 +1,4 @@
-# claude-hyprwhspr-converse
+# ClaudeConverse
 
 Hands-free voice conversations with [Claude Code](https://claude.com/claude-code) on **Arch Linux**. Type `/converse` and just talk: Claude answers out loud, then listens again. No keyboard needed.
 
@@ -37,8 +37,8 @@ Nothing is pip-installed into system Python or `/usr`, and hyprwhspr's config is
 ## Install
 
 ```bash
-git clone https://github.com/Imdabossou/claude-hyprwhspr-converse
-cd claude-hyprwhspr-converse
+git clone https://github.com/Imdabossou/ClaudeConverse
+cd ClaudeConverse
 ./install.sh
 ```
 

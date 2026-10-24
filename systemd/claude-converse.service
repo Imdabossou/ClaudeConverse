@@ -1,5 +1,5 @@
 [Unit]
-Description=claude-hyprwhspr-converse: voice conversations for Claude Code (MCP on 127.0.0.1)
+Description=ClaudeConverse: voice conversations for Claude Code (MCP on 127.0.0.1)
 After=hyprwhspr.service
 Wants=hyprwhspr.service
 
