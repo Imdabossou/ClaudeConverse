@@ -3,7 +3,7 @@
 # through THIS machine's microphone, speakers and GPU.
 #
 #   remote Claude ──► 127.0.0.1:PORT on the remote
-#        ──(SSH reverse tunnel, started from here)──► VoiceMode on 127.0.0.1:8765 here
+#        ──(SSH reverse tunnel, started from here)──► converse server on 127.0.0.1:8765 here
 #
 # Run ./install.sh on this machine first. The remote only needs Claude Code
 # and an SSH server; nothing else is installed there.
@@ -13,8 +13,8 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-KEY="$HOME/.ssh/voicemode_tunnel"
-TOKEN_FILE="$HOME/.voicemode/serve-token"
+KEY="$HOME/.ssh/claude_converse_tunnel"
+TOKEN_FILE="$HOME/.config/claude-converse/token"
 UNIT_DIR="$HOME/.config/systemd/user"
 
 step() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
@@ -26,23 +26,23 @@ if [[ "${1:-}" == "--remove" ]]; then REMOVE=1; shift; fi
 TARGET="${1:-}"
 PORT="${2:-18765}"
 [[ "$TARGET" == *@* ]] || { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
-# One tunnel unit per remote, e.g. voicemode-tunnel@claude-192.168.0.8
-UNIT="voicemode-tunnel@${TARGET//@/-}.service"
+# One tunnel unit per remote, e.g. claude-converse-tunnel@claude-192.168.0.8
+UNIT="claude-converse-tunnel@${TARGET//@/-}.service"
 
 if [[ $REMOVE == 1 ]]; then
   systemctl --user disable --now "$UNIT" 2>/dev/null || true
   echo "Tunnel to $TARGET removed."
-  echo "On $TARGET, you can also run: claude mcp remove --scope user voicemode"
-  echo "and delete ~/.claude/commands/converse.md and the 'voicemode-tunnel@' line in ~/.ssh/authorized_keys."
+  echo "On $TARGET, you can also run: claude mcp remove --scope user converse"
+  echo "and delete ~/.claude/commands/converse.md and the 'claude-converse-tunnel@' line in ~/.ssh/authorized_keys."
   exit 0
 fi
 
 [[ -s "$TOKEN_FILE" ]] || die "run ./install.sh on this machine first"
-systemctl --user is-active -q voicemode-serve || die "voicemode-serve isn't running (systemctl --user start voicemode-serve)"
+systemctl --user is-active -q claude-converse || die "the converse server isn't running (systemctl --user start claude-converse)"
 
 # ---------------------------------------------------------------- key
 step "Creating an SSH key for the tunnel"
-[[ -f "$KEY" ]] || ssh-keygen -q -t ed25519 -N "" -C "voicemode-tunnel@$(cat /etc/hostname 2>/dev/null || uname -n)" -f "$KEY"
+[[ -f "$KEY" ]] || ssh-keygen -q -t ed25519 -N "" -C "claude-converse-tunnel@$(cat /etc/hostname 2>/dev/null || uname -n)" -f "$KEY"
 ok "$KEY"
 
 ssh_r() { ssh -i "$KEY" -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10 "$TARGET" "$@"; }
@@ -68,21 +68,21 @@ port=$1; token=$2
 export PATH="$HOME/.local/bin:$PATH"
 command -v claude >/dev/null || { echo "Claude Code isn't installed on this machine"; exit 1; }
 if ss -ltn | grep -q "[:.]$port "; then echo "port $port is already in use here; pick another: ./connect-remote.sh user@host OTHER_PORT"; exit 1; fi
-claude mcp remove --scope user voicemode >/dev/null 2>&1 || true
-claude mcp add --scope user --transport http voicemode "http://127.0.0.1:$port/mcp" \
+claude mcp remove --scope user converse >/dev/null 2>&1 || true
+claude mcp add --scope user --transport http converse "http://127.0.0.1:$port/mcp" \
   --header "Authorization: Bearer $token" >/dev/null
 mkdir -p ~/.claude/commands
 echo "$3" | base64 -d > ~/.claude/commands/converse.md
-echo "    registered VoiceMode on 127.0.0.1:$port and added /converse"
+echo "    registered the converse MCP server on 127.0.0.1:$port and added /converse"
 EOF
 
 step "Restricting the key to this tunnel only (no shell)"
 ssh_r bash -s -- "$PORT" <<'EOF'
 f=~/.ssh/authorized_keys
-cp "$f" "$f.bak-voicemode"
-sed -i "/voicemode-tunnel@/{/^restrict/!s|^|restrict,port-forwarding,permitlisten=\"127.0.0.1:$1\",command=\"/usr/bin/false\" |}" "$f"
+cp "$f" "$f.bak-claude-converse"
+sed -i "/claude-converse-tunnel@/{/^restrict/!s|^|restrict,port-forwarding,permitlisten=\"127.0.0.1:$1\",command=\"/usr/bin/false\" |}" "$f"
 EOF
-ok "the key can now only forward 127.0.0.1:$PORT (backup: ~/.ssh/authorized_keys.bak-voicemode)"
+ok "the key can now only forward 127.0.0.1:$PORT (backup: ~/.ssh/authorized_keys.bak-claude-converse)"
 fi
 
 # ---------------------------------------------------------------- tunnel
@@ -90,9 +90,9 @@ step "Starting the tunnel (reconnects automatically, starts at login)"
 mkdir -p "$UNIT_DIR"
 cat > "$UNIT_DIR/$UNIT" <<EOF
 [Unit]
-Description=VoiceMode tunnel: $TARGET 127.0.0.1:$PORT -> this machine's VoiceMode (127.0.0.1:8765)
-After=network-online.target voicemode-serve.service
-Wants=voicemode-serve.service
+Description=claude-converse tunnel: $TARGET 127.0.0.1:$PORT -> this machine's converse server (127.0.0.1:8765)
+After=network-online.target claude-converse.service
+Wants=claude-converse.service
 
 [Service]
 ExecStart=/usr/bin/ssh -N -i $KEY -o IdentitiesOnly=yes -o BatchMode=yes \\
@@ -118,5 +118,5 @@ $(printf '\033[1;32mDone!\033[0m') On $TARGET, start a NEW Claude Code session a
     /converse
 
 It speaks and listens through this machine, so this machine must be on.
-The first time, allow the "voicemode converse" tool when asked.
+The first time, allow the "converse" tool when asked.
 EOF

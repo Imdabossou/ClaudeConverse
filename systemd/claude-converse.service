@@ -1,0 +1,15 @@
+[Unit]
+Description=claude-hyprwhspr-converse: voice conversations for Claude Code (MCP on 127.0.0.1)
+After=hyprwhspr.service
+Wants=hyprwhspr.service
+
+[Service]
+ExecStart=%h/.local/share/claude-converse/venv/bin/python %h/.local/share/claude-converse/server.py
+Environment=CONVERSE_TOKEN_FILE=%h/.config/claude-converse/token
+Environment=CONVERSE_VOICE_DIR=%h/.local/share/claude-converse/voices
+EnvironmentFile=-%h/.config/claude-converse/converse.env
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
