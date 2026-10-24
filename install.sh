@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Hands-free voice conversations with Claude Code on Arch Linux,
-# GPU-accelerated on any Vulkan GPU (AMD, Intel, NVIDIA), with the GLaDOS voice.
+# Hands-free voice conversations with Claude Code on Arch Linux, with the
+# GLaDOS voice. Speech-to-text comes from hyprwhspr, which you already use for
+# dictation: one Whisper model, loaded once (on your GPU if hyprwhspr uses it),
+# serves both.
 #
 # System packages come from the official Arch repos (pacman). Software that
-# isn't packaged for Arch (VoiceMode, whisper.cpp, piper-tts) is installed per
-# user under ~/.voicemode and ~/.local, never into system Python or /usr.
+# isn't packaged for Arch (VoiceMode, piper-tts) is installed per user under
+# ~/.voicemode and ~/.local, never into system Python or /usr.
 set -euo pipefail
 
 # ---------------------------------------------------------------- options
@@ -12,11 +14,7 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VOICE_NAME="glados"
 VOICE_SRC="$REPO_DIR/voices/en_US-glados-medium.onnx"
 VOICE_JSON_SRC="$VOICE_SRC.json"
-WHISPER_MODEL="base.en"
-USE_VULKAN=1
-HYPRWHSPR=0
 KOKORO_ROCM=0
-LAN=0
 
 usage() {
   cat <<EOF
@@ -24,12 +22,7 @@ Usage: ./install.sh [options]
 
   --voice NAME URL JSON_URL  Use another Piper voice instead of GLaDOS
                              (e.g. from huggingface.co/rhasspy/piper-voices)
-  --whisper-model MODEL      Whisper model (default: base.en; e.g. small.en, large-v3-turbo)
-  --cpu                      Don't build Whisper with Vulkan (CPU only)
-  --hyprwhspr                Use your running hyprwhspr for speech-to-text, so dictation and
-                             VoiceMode share its Whisper (no separate Whisper server is built)
   --kokoro-rocm              Keep VoiceMode's Kokoro TTS as a fallback, on an AMD GPU (ROCm)
-  --lan                      Let other machines on your network use Whisper (default: localhost only)
   -h, --help                 Show this help
 EOF
 }
@@ -37,11 +30,7 @@ EOF
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --voice) VOICE_NAME="$2"; VOICE_SRC="$3"; VOICE_JSON_SRC="$4"; shift 4 ;;
-    --whisper-model) WHISPER_MODEL="$2"; shift 2 ;;
-    --cpu) USE_VULKAN=0; shift ;;
-    --hyprwhspr) HYPRWHSPR=1; shift ;;
     --kokoro-rocm) KOKORO_ROCM=1; shift ;;
-    --lan) LAN=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1"; usage; exit 1 ;;
   esac
@@ -49,7 +38,7 @@ done
 
 VM_DIR="$HOME/.voicemode"
 VM_ENV="$VM_DIR/voicemode.env"
-WHISPER_DIR="$VM_DIR/services/whisper"
+HYPR_CFG="$HOME/.config/hyprwhspr/config.json"
 PIPER_DIR="$VM_DIR/services/piper"
 KOKORO_DIR="$VM_DIR/services/kokoro"
 VOICE_DIR="$HOME/.local/share/piper-voices"
@@ -83,16 +72,7 @@ step "Installing system packages from the Arch repos"
 [[ -f /etc/arch-release ]] || die "this script is for Arch Linux (and derivatives)"
 [[ $EUID -ne 0 ]] || die "run as your normal user, not root (sudo is used for pacman)"
 
-pkgs=(base-devel git cmake curl uv python ffmpeg portaudio)
-if [[ $USE_VULKAN == 1 ]]; then
-  pkgs+=(shaderc vulkan-headers vulkan-icd-loader)
-  gpus=$(lspci 2>/dev/null | grep -iE 'vga|3d|display' || true)
-  if grep -qiE 'amd|ati' <<<"$gpus"; then pkgs+=(vulkan-radeon); fi
-  if grep -qi 'intel' <<<"$gpus"; then pkgs+=(vulkan-intel); fi
-  if grep -qi 'nvidia' <<<"$gpus" && ! pacman -Qq nvidia-utils >/dev/null 2>&1; then
-    warn "NVIDIA GPU found: install your NVIDIA driver (nvidia-utils) for Vulkan"
-  fi
-fi
+pkgs=(base-devel git curl uv python ffmpeg portaudio)
 if [[ $KOKORO_ROCM == 1 ]]; then pkgs+=(rocm-hip-runtime); fi
 
 # pacman -T prints the ones that aren't installed yet
@@ -103,6 +83,8 @@ fi
 ok "${#pkgs[@]} packages present"
 
 command -v claude >/dev/null || die "Claude Code not found: install it first (https://claude.com/claude-code)"
+command -v hyprwhspr >/dev/null && [[ -f "$HYPR_CFG" ]] ||
+  die "hyprwhspr is required for speech-to-text. Install it from the AUR (e.g. 'yay -S hyprwhspr'), run 'hyprwhspr setup', then rerun this script"
 systemctl --user show-environment >/dev/null 2>&1 || die "systemd user services are required"
 
 # ---------------------------------------------------------------- VoiceMode
@@ -136,51 +118,26 @@ mkdir -p "$HOME/.claude/commands"
 cp "$REPO_DIR/commands/converse.md" "$HOME/.claude/commands/converse.md"
 ok "/converse command installed; VoiceMode server on 127.0.0.1:8765"
 
-# ---------------------------------------------------------------- Whisper
-if [[ $HYPRWHSPR == 1 ]]; then
-  step "Using hyprwhspr for speech-to-text (one shared Whisper, no extra server)"
-  cfg="$HOME/.config/hyprwhspr/config.json"
-  command -v hyprwhspr >/dev/null || die "hyprwhspr isn't installed (AUR: hyprwhspr)"
-  [[ -f "$cfg" ]] || die "hyprwhspr config not found at $cfg; run 'hyprwhspr setup' first"
-  # Older versions of this script pointed hyprwhspr at VoiceMode's Whisper; undo that
-  if [[ -f "$cfg.before-voicemode" ]] && grep -q '127.0.0.1:2022' "$cfg"; then
-    mv "$cfg.before-voicemode" "$cfg"
-    systemctl --user restart hyprwhspr 2>/dev/null || true
-    ok "restored hyprwhspr's own Whisper backend"
-  fi
-  backend=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("transcription_backend","pywhispercpp"))' "$cfg")
-  [[ $backend == realtime-ws ]] && die "hyprwhspr's realtime-ws backend can't transcribe files; pick another backend"
-  ok "hyprwhspr backend: $backend"
-  if [[ -f "$UNIT_DIR/voicemode-whisper.service" ]]; then
-    systemctl --user disable --now voicemode-whisper >/dev/null 2>&1 || true
-    ok "VoiceMode's own Whisper server switched off"
-  fi
-  stt_url="http://127.0.0.1:8881/v1"   # the Piper server forwards to hyprwhspr's socket
-else
-  step "Installing whisper.cpp ($WHISPER_MODEL)"
-  # 'voicemode whisper install' is deprecated, but it is the only form that takes --no-gpu/--model
-  vm whisper install --no-gpu --model "$WHISPER_MODEL" | grep -vE 'Progress:|Deprecated' | tail -3 || true
-  [[ -x "$WHISPER_DIR/build/bin/whisper-server" ]] || die "whisper.cpp install failed"
-  set_env VOICEMODE_WHISPER_MODEL "$WHISPER_MODEL"
-
-  if [[ $USE_VULKAN == 1 ]]; then
-    step "Rebuilding whisper.cpp with Vulkan (VoiceMode only builds for CUDA/Metal)"
-    (cd "$WHISPER_DIR" &&
-      cmake -B build -DGGML_VULKAN=ON -DCMAKE_BUILD_TYPE=Release -Wno-dev >/dev/null 2>&1 &&
-      cmake --build build -j"$(nproc)" --config Release >/dev/null) || die "Vulkan build failed (try --cpu)"
-    ok "built with Vulkan"
-  fi
-
-  if [[ $LAN == 0 ]]; then
-    sed -i 's/--host 0\.0\.0\.0/--host 127.0.0.1/' "$WHISPER_DIR/bin/start-whisper-server.sh"
-    ok "Whisper only accepts connections from this machine"
-  fi
-
-  vm service enable whisper >/dev/null
-  systemctl --user restart voicemode-whisper
-  stt_url="http://127.0.0.1:2022/v1"
+# ---------------------------------------------------------------- hyprwhspr
+step "Using hyprwhspr for speech-to-text"
+# Older versions of this script pointed hyprwhspr at a separate Whisper server; undo that
+if [[ -f "$HYPR_CFG.before-voicemode" ]] && grep -q '127.0.0.1:2022' "$HYPR_CFG"; then
+  mv "$HYPR_CFG.before-voicemode" "$HYPR_CFG"
+  systemctl --user restart hyprwhspr 2>/dev/null || true
+  ok "restored hyprwhspr's own Whisper backend"
 fi
-set_env VOICEMODE_STT_BASE_URLS "$stt_url"
+backend=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("transcription_backend","pywhispercpp"))' "$HYPR_CFG")
+[[ $backend == realtime-ws ]] && die "hyprwhspr's realtime-ws backend can't transcribe for VoiceMode; pick another in 'hyprwhspr setup'"
+systemctl --user enable hyprwhspr >/dev/null 2>&1 || true
+systemctl --user is-active -q hyprwhspr || systemctl --user restart hyprwhspr
+ok "hyprwhspr backend: $backend"
+# ...and switch off the separate Whisper server those versions installed
+if [[ -f "$UNIT_DIR/voicemode-whisper.service" ]]; then
+  systemctl --user disable --now voicemode-whisper >/dev/null 2>&1 || true
+  ok "old separate Whisper server switched off (remove ~/.voicemode/services/whisper to reclaim space)"
+fi
+# The Piper server's /v1/audio/transcriptions forwards to hyprwhspr's control socket
+set_env VOICEMODE_STT_BASE_URLS http://127.0.0.1:8881/v1
 
 # ---------------------------------------------------------------- Piper
 step "Installing Piper TTS with the '$VOICE_NAME' voice (per-user venv on system Python)"
@@ -234,8 +191,7 @@ systemctl --user restart voicemode-serve   # it reads voicemode.env at start
 # ---------------------------------------------------------------- verify
 step "Testing"
 for _ in $(seq 30); do
-  curl -fs -o /dev/null http://127.0.0.1:8881/health &&
-    { [[ $HYPRWHSPR == 1 ]] || curl -fs -o /dev/null http://127.0.0.1:2022/; } && break
+  curl -fs -o /dev/null http://127.0.0.1:8881/health && break
   sleep 1
 done
 tmp="$(mktemp --suffix .wav)"
@@ -248,22 +204,15 @@ else
 fi
 text=""
 for _ in 1 2 3; do
-  text=$(curl -fs "$stt_url/audio/transcriptions" -F file=@"$tmp" -F model=whisper-1) && break
+  text=$(curl -fs http://127.0.0.1:8881/v1/audio/transcriptions -F file=@"$tmp" -F model=whisper-1) && break
   sleep 5
 done
 if [[ -n "$text" ]]; then
-  ok "Whisper heard: $text"
-elif [[ $HYPRWHSPR == 1 && "$(cat "$HOME/.config/hyprwhspr/recording_status" 2>/dev/null)" == true ]]; then
+  ok "hyprwhspr heard: $text"
+elif [[ "$(cat "$HOME/.config/hyprwhspr/recording_status" 2>/dev/null)" == true ]]; then
   warn "hyprwhspr is busy recording dictation, so the speech-to-text test was skipped"
-elif [[ $HYPRWHSPR == 1 ]]; then
-  die "hyprwhspr didn't transcribe (is it running and its model loaded? journalctl --user -u hyprwhspr)"
 else
-  die "Whisper not responding (journalctl --user -u voicemode-whisper)"
-fi
-if [[ $HYPRWHSPR == 0 && $USE_VULKAN == 1 ]]; then
-  gpu=$(journalctl --user -u voicemode-whisper --since "-5min" --no-pager 2>/dev/null |
-        grep -m1 -oP 'ggml_vulkan: 0 = \K[^(]+' || true)
-  if [[ -n "$gpu" ]]; then ok "Whisper GPU: $gpu"; else warn "couldn't confirm the Vulkan GPU from the logs"; fi
+  die "hyprwhspr didn't transcribe (is its model loaded? journalctl --user -u hyprwhspr)"
 fi
 
 cat <<EOF
