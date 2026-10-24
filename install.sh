@@ -107,9 +107,6 @@ systemctl --user restart claude-converse
 
 # ---------------------------------------------------------------- Claude Code
 step "Connecting Claude Code"
-# The VoiceMode plugin would add a second command (/voicemode:converse) and beep
-# on every tool call, so turn it off if it happens to be installed
-claude plugin disable voicemode@voicemode >/dev/null 2>&1 || true
 claude mcp remove --scope user converse >/dev/null 2>&1 || true
 claude mcp add --scope user --transport http converse "http://127.0.0.1:$PORT/mcp" \
   --header "Authorization: Bearer $(cat "$CONF_DIR/token")" >/dev/null
