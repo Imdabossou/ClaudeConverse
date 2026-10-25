@@ -26,7 +26,7 @@ if [[ "${1:-}" == "--remove" ]]; then REMOVE=1; shift; fi
 TARGET="${1:-}"
 PORT="${2:-18765}"
 [[ "$TARGET" == *@* ]] || { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
-# One tunnel unit per remote, e.g. claude-converse-tunnel@claude-192.168.0.8
+# One tunnel unit per remote, e.g. claude-converse-tunnel@user-192.168.1.50
 UNIT="claude-converse-tunnel@${TARGET//@/-}.service"
 
 if [[ $REMOVE == 1 ]]; then

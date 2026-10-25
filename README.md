@@ -77,7 +77,7 @@ To change the Whisper model or GPU backend, use `hyprwhspr setup`.
 If you run Claude Code on a server or mini PC (for example, through Remote Control), it can use **this** machine's mic, speakers and hyprwhspr:
 
 ```bash
-./connect-remote.sh user@192.168.0.8
+./connect-remote.sh user@192.168.1.50
 ```
 
 The remote machine only needs Claude Code and an SSH server. Nothing else is installed there: no Whisper, no GPU and no audio.
