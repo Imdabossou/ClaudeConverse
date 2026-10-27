@@ -149,4 +149,4 @@ journalctl --user -u claude-converse -f
 - Inspired by [VoiceMode](https://github.com/mbailey/voicemode) by Mike Bailey
 - The GLaDOS voice model in [`voices/`](voices/) is from [dnhkng/GlaDOS](https://github.com/dnhkng/GlaDOS) (`glados.onnx`, release 0.1, MIT-licensed project), trained with Piper on Portal 2 voice lines. GLaDOS and Portal belong to Valve; this is a non-commercial fan project.
 
-The code in this repo is MIT licensed.
+The code in this repo is licensed under the [GPL-3.0-or-later](LICENSE).
