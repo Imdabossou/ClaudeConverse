@@ -1,4 +1,4 @@
-# ClaudeConverse
+# <img src="assets/claudeconverse.png" width="36" align="top" alt=""> ClaudeConverse
 
 Hands-free voice conversations with [Claude Code](https://claude.com/claude-code) on **Arch Linux**. Type `/converse` and just talk: Claude answers out loud, then listens again. No keyboard needed.
 
