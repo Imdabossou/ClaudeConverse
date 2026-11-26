@@ -22,6 +22,8 @@ cd ClaudeConverse
 ./install.sh
 ```
 
+> **Note:** when Arch upgrades Python to a new version (for example 3.14 to 3.15), `/converse` stops working until you run `./install.sh` again. It rebuilds the venv and keeps your settings (if you chose another voice, pass the same `--voice` option again).
+
 Then start a new Claude Code session and run `/converse`. The [user guide](docs/guide.md) covers settings, other voices, remote machines and troubleshooting.
 
 ## Credits and licence
